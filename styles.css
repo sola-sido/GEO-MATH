@@ -645,6 +645,17 @@ a { color: inherit; text-decoration: none; }
   cursor: pointer;
 }
 
+.guest-form button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.guest-status {
+  margin: -12px 0 18px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .guest-wall {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));

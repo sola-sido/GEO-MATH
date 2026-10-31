@@ -19,8 +19,13 @@
   const topbar = document.querySelector(".topbar");
   const foyer = document.querySelector("#foyer");
 
+  const SHARE_URL = String(window.SHARE_URL || "").trim();
+
   let index = -1;
   let lastFocus = null;
+  let sharedNotes = null;
+  let sharedLikes = null;
+  let shareChain = Promise.resolve();
 
   document.title = SHOW.title + " — 온라인 전시";
   setText("[data-title]", SHOW.title);
@@ -32,6 +37,7 @@
   bindViewer();
   bindScroll();
   openFromHash();
+  startShare();
 
   function setText(sel, value) {
     const node = document.querySelector(sel);
@@ -151,15 +157,23 @@
   }
 
   function readLikes() {
+    let mine = {};
+    let counts = {};
     try {
       const data = JSON.parse(localStorage.getItem("wave-gallery-likes") || "");
-      if (data && data.counts && data.mine) return data;
+      if (data && data.mine) mine = data.mine;
+      if (data && data.counts) counts = data.counts;
     } catch (error) {}
-    return { counts: {}, mine: {} };
+    if (shareOn()) return { counts: sharedLikes || {}, mine: mine };
+    return { counts: counts, mine: mine };
   }
 
   function writeLikes(data) {
-    localStorage.setItem("wave-gallery-likes", JSON.stringify(data));
+    const stored = shareOn()
+      ? { counts: {}, mine: data.mine }
+      : { counts: data.counts, mine: data.mine };
+    localStorage.setItem("wave-gallery-likes", JSON.stringify(stored));
+    if (shareOn()) sharedLikes = data.counts;
   }
 
   function paintLikes() {
@@ -178,6 +192,7 @@
 
   function toggleLike(id) {
     const data = readLikes();
+    const delta = data.mine[id] ? -1 : 1;
     if (data.mine[id]) {
       data.mine[id] = false;
       data.counts[id] = Math.max(0, (data.counts[id] || 1) - 1);
@@ -187,6 +202,9 @@
     }
     writeLikes(data);
     paintLikes();
+    if (shareOn()) {
+      pushShare({ op: "like", id: id, delta: delta });
+    }
   }
 
   function bindLikes() {
@@ -520,7 +538,75 @@
     if (lastFocus && typeof lastFocus.focus === "function") lastFocus.focus();
   }
 
+  function shareOn() {
+    return SHARE_URL.indexOf("https://script.google.com/macros/") === 0;
+  }
+
+  function setGuestStatus(message) {
+    const node = document.querySelector("#guest-status");
+    if (!node) return;
+    node.textContent = message || "";
+    node.hidden = !message;
+  }
+
+  function applyShare(data) {
+    if (!data || !Array.isArray(data.notes) || !data.likes || typeof data.likes !== "object") {
+      throw new Error("bad share");
+    }
+    sharedNotes = data.notes.filter(function (note) {
+      return note && typeof note.text === "string" && note.text.trim();
+    }).slice(0, 200);
+    sharedLikes = data.likes;
+    renderNotes();
+    paintLikes();
+  }
+
+  function enqueueShare(task, report) {
+    const next = shareChain.then(task, task);
+    shareChain = next.then(function () {}, function () {});
+    return next.then(function () {
+      return true;
+    }, function () {
+      if (report) setGuestStatus("지금 저장하지 못했습니다. 잠시 후 다시 눌러 주세요.");
+      return false;
+    });
+  }
+
+  function pullShare() {
+    return enqueueShare(function () {
+      return fetch(SHARE_URL + "?t=" + Date.now(), { method: "GET", cache: "no-store" })
+        .then(function (res) { return res.json(); })
+        .then(applyShare);
+    }, false);
+  }
+
+  function pushShare(body) {
+    return enqueueShare(function () {
+      return fetch(SHARE_URL, {
+        method: "POST",
+        redirect: "follow",
+        cache: "no-store",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify(body)
+      }).then(function (res) { return res.json(); }).then(function (data) {
+        applyShare(data);
+        setGuestStatus("");
+      });
+    }, true);
+  }
+
+  function startShare() {
+    if (!shareOn()) return;
+    const lead = document.querySelector(".guest-lead");
+    if (lead) lead.textContent = "감상은 남길 수 있습니다. 붙인 글은 모든 기기에서 보이고, 고치거나 떼지 않습니다.";
+    pullShare();
+    setInterval(function () {
+      if (!document.hidden) pullShare();
+    }, 20000);
+  }
+
   function readNotes() {
+    if (shareOn()) return sharedNotes || [];
     try {
       const notes = JSON.parse(localStorage.getItem("wave-gallery-notes") || "[]");
       return Array.isArray(notes) ? notes : [];
@@ -560,6 +646,15 @@
       const name = form.name.value.trim().slice(0, 20);
       const text = form.text.value.trim().slice(0, 140);
       if (!text) return;
+      if (shareOn()) {
+        const button = form.querySelector("button");
+        if (button) button.disabled = true;
+        pushShare({ op: "note", name: name, text: text }).then(function (ok) {
+          if (button) button.disabled = false;
+          if (ok) form.reset();
+        });
+        return;
+      }
       const notes = readNotes();
       notes.unshift({ name: name, text: text, at: Date.now() });
       localStorage.setItem("wave-gallery-notes", JSON.stringify(notes.slice(0, 200)));

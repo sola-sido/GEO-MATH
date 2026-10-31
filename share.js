@@ -1,0 +1,1 @@
+window.SHARE_URL = "";
