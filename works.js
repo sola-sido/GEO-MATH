@@ -428,6 +428,22 @@ window.SHOW = {
       "tone": "light"
     },
     {
+      "id": "w-20725-png",
+      "room": "works",
+      "no": "20725",
+      "title": "20725",
+      "student": "",
+      "fn": "",
+      "params": "",
+      "idea": "",
+      "prompt": "",
+      "image": "images1/part2/20725.png",
+      "sample": false,
+      "layout": "span-4",
+      "ratio": "16 / 9",
+      "tone": "light"
+    },
+    {
       "id": "w-20723-png",
       "room": "works",
       "no": "20723",
