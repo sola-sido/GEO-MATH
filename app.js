@@ -538,8 +538,105 @@
     if (lastFocus && typeof lastFocus.focus === "function") lastFocus.focus();
   }
 
+  function shareKind() {
+    if (SHARE_URL.indexOf("https://script.google.com/macros/") === 0) return "sheet";
+    if (SHARE_URL.indexOf("https://crudcrud.com/api/") === 0) return "crud";
+    return "";
+  }
+
   function shareOn() {
-    return SHARE_URL.indexOf("https://script.google.com/macros/") === 0;
+    return shareKind() !== "";
+  }
+
+  function readLikeIds() {
+    try {
+      const data = JSON.parse(localStorage.getItem("wave-gallery-like-ids") || "{}");
+      if (data && typeof data === "object") return data;
+    } catch (error) {}
+    return {};
+  }
+
+  function writeLikeIds(data) {
+    localStorage.setItem("wave-gallery-like-ids", JSON.stringify(data));
+  }
+
+  function crudList(path) {
+    return fetch(SHARE_URL + path, { cache: "no-store" }).then(function (res) {
+      if (res.status === 404) return [];
+      if (!res.ok) throw new Error("list");
+      return res.json();
+    });
+  }
+
+  function fromCrud(notes, likes) {
+    const counts = {};
+    (Array.isArray(likes) ? likes : []).forEach(function (like) {
+      if (!like || typeof like.work !== "string") return;
+      counts[like.work] = (counts[like.work] || 0) + 1;
+    });
+    const list = (Array.isArray(notes) ? notes : []).map(function (note) {
+      return {
+        name: typeof note.name === "string" ? note.name : "",
+        text: typeof note.text === "string" ? note.text : "",
+        at: note.at || ""
+      };
+    }).filter(function (note) {
+      return note.text.trim();
+    });
+    list.sort(function (a, b) {
+      return String(b.at).localeCompare(String(a.at));
+    });
+    return { notes: list.slice(0, 200), likes: counts };
+  }
+
+  function pullCrud() {
+    return Promise.all([crudList("/notes"), crudList("/likes")]).then(function (pair) {
+      applyShare(fromCrud(pair[0], pair[1]));
+    });
+  }
+
+  function pushCrud(body) {
+    if (body.op === "note") {
+      return fetch(SHARE_URL + "/notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: String(body.name || "").slice(0, 20),
+          text: String(body.text || "").slice(0, 140),
+          at: new Date().toISOString()
+        })
+      }).then(function (res) {
+        if (!res.ok) throw new Error("note");
+        return pullCrud();
+      });
+    }
+    if (body.op === "like" && /^w-[a-z0-9-]+$/.test(body.id || "")) {
+      const ids = readLikeIds();
+      if (body.delta > 0) {
+        if (ids[body.id]) return pullCrud();
+        return fetch(SHARE_URL + "/likes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ work: body.id, at: new Date().toISOString() })
+        }).then(function (res) {
+          if (!res.ok) throw new Error("like");
+          return res.json();
+        }).then(function (saved) {
+          ids[body.id] = saved._id;
+          writeLikeIds(ids);
+          return pullCrud();
+        });
+      }
+      const likeId = ids[body.id];
+      delete ids[body.id];
+      writeLikeIds(ids);
+      if (!likeId) return pullCrud();
+      return fetch(SHARE_URL + "/likes/" + likeId, { method: "DELETE" }).then(function (res) {
+        if (!res.ok && res.status !== 404) throw new Error("unlike");
+        return pullCrud();
+      });
+    }
+    return pullCrud();
   }
 
   function setGuestStatus(message) {
@@ -574,6 +671,7 @@
 
   function pullShare() {
     return enqueueShare(function () {
+      if (shareKind() === "crud") return pullCrud();
       return fetch(SHARE_URL + "?t=" + Date.now(), { method: "GET", cache: "no-store" })
         .then(function (res) { return res.json(); })
         .then(applyShare);
@@ -582,6 +680,11 @@
 
   function pushShare(body) {
     return enqueueShare(function () {
+      if (shareKind() === "crud") {
+        return pushCrud(body).then(function () {
+          setGuestStatus("");
+        });
+      }
       return fetch(SHARE_URL, {
         method: "POST",
         redirect: "follow",
